@@ -113,7 +113,13 @@ def create_vpn_connection(module, ec2):
     if module.params.get('static_routes_only'):
         filters.append({'Name': 'option.static-routes-only', 'Values': ['true']})
 
-    vpns = ec2.describe_vpn_connections(Filters=filters)
+    try:
+        vpns = ec2.describe_vpn_connections(Filters=filters)
+    except ClientError as e:
+        module.fail_json(
+            msg="Failed to describe VPN connections: %s" % e.message, 
+            exception=traceback.format_exc()
+        )
 
     if vpns['VpnConnections']:
         # only one will ever be returned for a (customer-gateway-id, vpn-gateway-id) pair
@@ -143,10 +149,16 @@ def delete_vpn_connection(module, ec2):
     deleted_ids = []
 
     for vpn in vpns['VpnConnections']:
-        ec2.delete_vpn_connection(VpnConnectionId=vpn['VpnConnectionId'])
-        deleted_ids.append(vpn['VpnConnectionId'])
+        try:
+            ec2.delete_vpn_connection(VpnConnectionId=vpn['VpnConnectionId'])
+            deleted_ids.append(vpn['VpnConnectionId'])
+        except ClientError as e:
+            module.fail_json(
+                msg="Failed to delete VPN connection %s: %s" % (vpn['VpnConnectionId'], e.message),
+                exception=traceback.format_exc()
+            )
 
-    return (deleted_ids)
+    return deleted_ids
 
 
 def main():
@@ -169,11 +181,11 @@ def main():
         ],
     )
 
-    if not HAS_BOTOCORE:
-        module.fail_json(msg='botocore is required.')
-
     if not HAS_BOTO3:
         module.fail_json(msg='boto3 is required.')
+
+    if not HAS_BOTOCORE:
+        module.fail_json(msg='botocore is required.')
 
 
     try:
@@ -182,12 +194,12 @@ def main():
             module.fail_json(msg="Region must be specified as a parameter, in EC2_REGION or AWS_REGION environment variables or in boto configuration file")
         ec2 = boto3_conn(module, conn_type='client', resource='ec2', region=region, endpoint=ec2_url, **aws_connect_kwargs)
     except ClientError as e:
-        module.fail_json(msg=e.message)
+        module.fail_json(msg="Couldn't connect to AWS: %s" % e.message, exception=traceback.format_exc())
 
     state = module.params.get('state')
 
     if state == 'present':
-        (connection, changed) = create_vpn_connection(module, ec2)
+        connection, changed = create_vpn_connection(module, ec2)
         module.exit_json(changed=changed, connection=connection)
     elif state == 'absent':
         deleted_ids = delete_vpn_connection(module, ec2)
